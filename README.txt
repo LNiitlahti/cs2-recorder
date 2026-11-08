@@ -3,11 +3,24 @@ CS2 RECORDER
 
 Records your chosen CS2 frags from a demo, automatically, as separate layers for editing.
 
-HOW TO USE
-1. Unzip this folder somewhere simple, for example C:\CS2Recorder
-   (not inside OneDrive, and no special letters like a/o with dots in the path).
-2. Double-click START.bat.
-3. Follow the steps in the window. Every step explains itself.
+INSTALL (once)
+1. Right-click the downloaded zip and choose "Extract All...", then "Extract".
+   (Do not run anything from inside the zip without extracting it.)
+2. In the extracted folder, double-click INSTALL.bat.
+   Windows may ask if you really want to run it: choose "Run"
+   (or "More info" > "Run anyway").
+3. The tool is copied to C:\cs2-recorder and a "CS2 Recorder" icon appears
+   on your Desktop and in the Start menu. The recorder opens right away.
+4. You can now delete the zip and the extracted folder.
+
+USE
+- Double-click the "CS2 Recorder" icon and follow the steps. Every step explains itself.
+
+UPDATE
+- Download the new zip and install it the same way. Your settings and recordings are kept.
+
+UNINSTALL
+- Delete the folder C:\cs2-recorder and the "CS2 Recorder" icons (Desktop and Start menu).
 
 WHAT YOU NEED (the tool checks all of this and helps you install what is missing)
 - Windows 10 or 11
@@ -16,7 +29,7 @@ WHAT YOU NEED (the tool checks all of this and helps you install what is missing
 - About 2-5 minutes of internet the first time (the tool installs a small demo reader)
 - HLAE and FFmpeg are installed by CS Demo Manager by itself
 
-WHAT YOU GET (in the folder you choose)
+WHAT YOU GET (default folder C:\cs2-recorder\recordings)
   <demo>_<date>\
     clip01_r16_4k\
       pov\  video_killfeed_audio.mp4   normal first-person video with killfeed and sound
@@ -33,4 +46,4 @@ GOOD TO KNOW
 - Very old demos (from an older CS2 update) can crash the game when they load. Use newer demos then.
 - depth.mov looks almost black. That is normal; brighten it in your editor.
 - The camera shot is computed without 3D map data, so it can sometimes clip through a wall or object. Check it.
-- Problems? Look at data\wizard.log and the log_*.txt files in the output folder.
+- Problems? Look at C:\cs2-recorder\data\wizard.log and the log_*.txt files in the recording folder.

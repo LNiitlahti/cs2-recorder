@@ -24,7 +24,7 @@ $UTF8 = New-Object System.Text.UTF8Encoding($false)
 # ------------------------------------------------------------------ state
 $script:StateFile = Join-Path $script:Data 'state.json'
 $script:S = @{
-    OutDir = 'C:\CS2Rec'; Width = 1920; Height = 1080; Fps = 60
+    OutDir = (Join-Path $script:Base 'recordings'); Width = 1920; Height = 1080; Fps = 60
     Layers = @('clean', 'hud', 'depth', 'players', 'viewModel', 'particlesBlack')
     CamOn = $true; CamFps = 120; Fov = 50; CamDist = 110
     CamLayers = @('clean', 'players', 'depth', 'particlesBlack')
@@ -358,10 +358,10 @@ function Get-ExpectedFile([string]$dir, [string]$key) {
     return (Join-Path $dir "$key.$ext")
 }
 function Test-SafePath([string]$p) {
-    if ($p -match '[^\x20-\x7E]') { return 'The folder path has special letters (like a, o with dots, or accents). Recording tools can break on them. Pick a simple path like C:\CS2Rec.' }
-    if ($p -match '[#%"''&^]') { return 'The folder path contains one of these characters: # % " '' & ^ - please pick a simpler path like C:\CS2Rec.' }
-    if ($p -match '//') { return 'The folder path contains //. Please pick a simple path like C:\CS2Rec.' }
-    if ($p.Length -gt 120) { return 'The folder path is very long. Please pick a shorter one like C:\CS2Rec.' }
+    if ($p -match '[^\x20-\x7E]') { return 'The folder path has special letters (like a, o with dots, or accents). Recording tools can break on them. Pick a simple path like C:\cs2-recorder\recordings.' }
+    if ($p -match '[#%"''&^]') { return 'The folder path contains one of these characters: # % " '' & ^ - please pick a simpler path like C:\cs2-recorder\recordings.' }
+    if ($p -match '//') { return 'The folder path contains //. Please pick a simple path like C:\cs2-recorder\recordings.' }
+    if ($p.Length -gt 120) { return 'The folder path is very long. Please pick a shorter one like C:\cs2-recorder\recordings.' }
     return $null
 }
 
