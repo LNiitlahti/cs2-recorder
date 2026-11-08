@@ -460,9 +460,11 @@ $script:Pages += @{ Title = 'Check software'; Build = {
     }
     $script:Rw = @{
         Csdm = (& $mk 'CS Demo Manager'); Pg = (& $mk 'PostgreSQL (CSDM database)'); Steam = (& $mk 'Steam')
-        Cs2 = (& $mk 'Counter-Strike 2'); Py = (& $mk 'Demo reader (Python)')
+        Cs2 = (& $mk 'Counter-Strike 2'); Py = (& $mk 'Demo reader (Python)'); Rec = (& $mk 'HLAE + FFmpeg (recording)')
     }
-    Add-Text ('HLAE and FFmpeg: CS Demo Manager downloads and installs these by itself during the first recording. Nothing to do here.') $C_DIM | Out-Null
+    $script:DlLbl = Add-Text ' ' $C_ACC; $script:DlLbl.Visible = $false
+    $script:DlBar = New-Object Windows.Forms.ProgressBar; $script:DlBar.Minimum = 0; $script:DlBar.Maximum = 1000
+    [void](Add-Ctl $script:DlBar 20); $script:DlBar.Visible = $false
     $script:CheckLog = Add-Log 120
     $script:CheckLog.Visible = $false
     Add-Button 'Check again' { Invoke-Checks } | Out-Null
@@ -487,6 +489,7 @@ $script:Pages += @{ Title = 'Check software'; Build = {
     $script:Rw.Steam.B.Add_Click({ Start-Process 'https://store.steampowered.com/about/' })
     $script:Rw.Cs2.B.Add_Click({ Start-Process 'steam://install/730' })
     $script:Rw.Py.B.Add_Click({ Install-Helper })
+    $script:Rw.Rec.B.Add_Click({ Install-RecTools })
     Invoke-Checks
 } }
 
@@ -519,8 +522,136 @@ function Invoke-Checks {
 
     if (Test-HelperReady) { $script:R.Py = $script:VenvPy; Set-Row $script:Rw.Py $true 'OK  ready' }
     else { Set-Row $script:Rw.Py $false 'Needed to read kills from demos. One-time install (about 2-5 minutes, needs internet).' 'Install'; $all = $false }
+
+    $tp = Get-RecToolPaths
+    $miss = @(); $custom = @()
+    if (-not (Test-Path $tp.Hlae)) { $miss += 'HLAE'; if ($tp.HlaeCustom) { $custom += "HLAE ($($tp.Hlae))" } }
+    if (-not (Test-Path $tp.Ffmpeg)) { $miss += 'FFmpeg'; if ($tp.FfmpegCustom) { $custom += "FFmpeg ($($tp.Ffmpeg))" } }
+    if ($miss.Count -eq 0) { Set-Row $script:Rw.Rec $true 'OK  both installed' }
+    elseif ($custom.Count -gt 0) { Set-Row $script:Rw.Rec $false ("CS Demo Manager is set to use your own copy, but it is missing: " + ($custom -join ', ') + ". Fix the path in CSDM > Settings > Video."); $all = $false }
+    else { Set-Row $script:Rw.Rec $false ('Missing: ' + ($miss -join ' and ') + '. One-time download (FFmpeg is about 185 MB).') 'Install'; $all = $false }
     Set-CanNext $all
 }
+# ---------- HLAE + FFmpeg: installed by this tool into the exact folders CS Demo Manager uses
+# (CSDM's own installer follows only one web redirect and can save a web page as the zip -> "Archive read error")
+$script:CsdmApp = Join-Path $env:USERPROFILE '.csdm'
+function Get-CsdmSettings {
+    $f = Join-Path $script:CsdmApp 'settings.json'
+    if (Test-Path $f) { try { return (Get-Content $f -Raw | ConvertFrom-Json) } catch { Log "csdm settings unreadable: $_" } }
+    return $null
+}
+function Get-RecToolPaths {
+    $s = Get-CsdmSettings
+    $r = @{ Hlae = (Join-Path $script:CsdmApp 'hlae\hlae.exe'); Ffmpeg = (Join-Path $script:CsdmApp 'ffmpeg\bin\ffmpeg.exe'); HlaeCustom = $false; FfmpegCustom = $false }
+    if ($s -and $s.video) {
+        $h = $s.video.hlae
+        if ($h -and $h.customLocationEnabled -and $h.customExecutableLocation) { $r.Hlae = Join-Path (Split-Path ([string]$h.customExecutableLocation)) 'hlae.exe'; $r.HlaeCustom = $true }
+        $f = $s.video.ffmpegSettings
+        if ($f -and $f.customLocationEnabled -and $f.customExecutableLocation) { $r.Ffmpeg = [string]$f.customExecutableLocation; $r.FfmpegCustom = $true }
+    }
+    return $r
+}
+function Get-GhJson([string]$url) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    return (Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'cs2-recorder' } -TimeoutSec 30)
+}
+function Start-PsBg([string]$code, [scriptblock]$onDone, $ctx = $null) {
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+    return (Start-Bg ('powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + $enc) $onDone $ctx)
+}
+function Lit([string]$s) { return "'" + $s.Replace("'", "''") + "'" }   # PowerShell single-quoted literal
+function Install-RecTools {
+    $tp = Get-RecToolPaths
+    $jobs = New-Object Collections.ArrayList
+    try {
+        if (-not (Test-Path $tp.Hlae)) {
+            $rel = @(Get-GhJson 'https://api.github.com/repos/advancedfx/advancedfx/releases') | Where-Object { -not $_.prerelease } | Select-Object -First 1
+            $a = @($rel.assets | Where-Object { $_.name -match '^hlae_[\d_]+\.zip$' }) + @($rel.assets | Where-Object { $_.name -match '\.zip$' })
+            if (-not $a) { throw 'No HLAE download found on GitHub.' }
+            [void]$jobs.Add(@{ Name = "HLAE $($rel.tag_name)"; Kind = 'hlae'; Url = $a[0].browser_download_url; Size = [int64]$a[0].size; Dest = (Join-Path $script:CsdmApp 'hlae') })
+        }
+        if (-not (Test-Path $tp.Ffmpeg)) {
+            $rel = Get-GhJson 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest'
+            $best = $null; $bestV = [version]'0.0'
+            foreach ($x in $rel.assets) {
+                $m = [regex]::Match($x.name, '^ffmpeg-n(\d+\.\d+(?:\.\d+)?)-latest-win64-gpl-[\d.]+\.zip$')
+                if ($m.Success -and [version]$m.Groups[1].Value -gt $bestV) { $best = $x; $bestV = [version]$m.Groups[1].Value }
+            }
+            if (-not $best) { $best = $rel.assets | Where-Object { $_.name -eq 'ffmpeg-master-latest-win64-gpl.zip' } | Select-Object -First 1 }
+            if (-not $best) { throw 'No FFmpeg download found on GitHub.' }
+            [void]$jobs.Add(@{ Name = "FFmpeg $bestV"; Kind = 'ffmpeg'; Url = $best.browser_download_url; Size = [int64]$best.size; Dest = (Join-Path $script:CsdmApp 'ffmpeg') })
+        }
+    } catch { Show-Error ("Could not reach GitHub to find the downloads:`r`n" + $_.Exception.Message + "`r`n`r`nCheck the internet connection and press Install again."); return }
+    $script:R.ToolJobs = $jobs
+    $script:Rw.Rec.B.Enabled = $false
+    Next-ToolInstall
+}
+function Next-ToolInstall {
+    if ($script:R.ToolJobs.Count -eq 0) {
+        $script:DlBar.Visible = $false; $script:DlLbl.Visible = $false; $script:OnTick = $null
+        $script:Rw.Rec.B.Enabled = $true; Invoke-Checks; return
+    }
+    $j = $script:R.ToolJobs[0]; $script:R.ToolJobs.RemoveAt(0)
+    New-Item -ItemType Directory -Force -Path $script:CsdmApp | Out-Null
+    $j.Zip = Join-Path $script:Data ("dl_" + $j.Kind + ".zip")
+    $script:R.Dl = $j
+    $script:DlBar.Style = 'Continuous'; $script:DlBar.Value = 0; $script:DlBar.Visible = $true
+    $script:DlLbl.Text = "Downloading $($j.Name)..."; $script:DlLbl.Visible = $true
+    $script:OnTick = {
+        $d = $script:R.Dl; if (-not $d) { return }
+        $len = 0; try { $len = (Get-Item -LiteralPath $d.Zip -ErrorAction Stop).Length } catch {}
+        if ($d.Size -gt 0 -and $len -lt $d.Size) {
+            $script:DlBar.Style = 'Continuous'; $script:DlBar.Value = [int][Math]::Min(1000, 1000 * $len / $d.Size)
+            $script:DlLbl.Text = ('Downloading {0}:  {1:N0} / {2:N0} MB' -f $d.Name, ($len / 1MB), ($d.Size / 1MB))
+        } elseif ($len -gt 0) { $script:DlBar.Style = 'Marquee'; $script:DlLbl.Text = "Unpacking $($d.Name)..." }
+    }
+    $code = @'
+$ErrorActionPreference = 'Stop'
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $wc = New-Object Net.WebClient; $wc.Headers.Add('User-Agent', 'cs2-recorder')
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+    $wc.DownloadFile($url, $zip)
+    $fs = [IO.File]::OpenRead($zip); $b1 = $fs.ReadByte(); $b2 = $fs.ReadByte(); $fs.Close()
+    if ($b1 -ne 0x50 -or $b2 -ne 0x4B) { throw 'The download is not a zip file (a web page came back instead). Try again in a moment.' }
+    $tmp = Join-Path $app ('_extract_' + $kind)
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $tar = $null; if ($env:SystemRoot) { $tar = Join-Path $env:SystemRoot 'System32\tar.exe' }
+    if ($tar -and (Test-Path $tar)) { & $tar -xf $zip -C $tmp; if ($LASTEXITCODE -ne 0) { throw "Unpacking failed (tar exit $LASTEXITCODE)." } }
+    else { Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force }
+    if ($kind -eq 'hlae') {
+        $exe = Get-ChildItem -LiteralPath $tmp -Recurse -Filter 'hlae.exe' | Select-Object -First 1
+        if (-not $exe) { throw 'hlae.exe was not found in the download.' }
+        $src = $exe.DirectoryName
+    } else {
+        $exe = Get-ChildItem -LiteralPath $tmp -Recurse -Filter 'ffmpeg.exe' | Where-Object { $_.Directory.Name -eq 'bin' } | Select-Object -First 1
+        if (-not $exe) { throw 'bin\ffmpeg.exe was not found in the download.' }
+        $src = $exe.Directory.Parent.FullName
+    }
+    if (Test-Path -LiteralPath $dest) { Rename-Item -LiteralPath $dest -NewName ((Split-Path -Leaf $dest) + '_old_' + (Get-Date -Format 'yyyyMMddHHmmss')) }
+    Move-Item -LiteralPath $src -Destination $dest
+    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    'OK'
+} catch { 'ERROR: ' + $_.Exception.Message; exit 1 }
+'@
+    $code = ('$url = {0}; $zip = {1}; $dest = {2}; $app = {3}; $kind = {4}' -f (Lit $j.Url), (Lit $j.Zip), (Lit $j.Dest), (Lit $script:CsdmApp), (Lit $j.Kind)) + "`r`n" + $code
+    [void](Start-PsBg $code {
+        param($o, $e, $code, $ctx)
+        $script:R.Dl = $null
+        if ($code -ne 0 -or $o -notmatch 'OK') {
+            $msg = ($o + "`n" + $e).Trim()
+            $script:R.ToolJobs.Clear(); $script:DlBar.Visible = $false; $script:DlLbl.Visible = $false; $script:OnTick = $null
+            $script:Rw.Rec.B.Enabled = $true
+            Show-Error ("Installing $($ctx.Name) failed:`r`n$msg`r`n`r`nPress Install to try again.")
+            Invoke-Checks; return
+        }
+        Log "$($ctx.Name) installed to $($ctx.Dest)"
+        Next-ToolInstall
+    } $j)
+}
+
 function Install-Helper {
     $script:CheckLog.Visible = $true
     $script:CheckLog.Text = "Looking for Python...`r`n"
@@ -562,6 +693,8 @@ $script:Pages += @{ Title = 'Steam account'; Build = {
         "Keeping it on a second account keeps your main account and your own settings completely untouched. " +
         "CS2 is free to play, so a free second Steam account is enough.`r`n`r`n" +
         "To switch: Steam menu > Change account... (sign in to the second account), then come back here.") $C_WARN | Out-Null
+    Add-Text ("VAC safety: recording only ever starts CS2 with the -insecure option (no VAC, no official servers), which CS Demo Manager adds by itself. " +
+        "This tool also double-checks it while recording and closes CS2 at once if it is missing. Never start HLAE yourself without -insecure.") $C_DIM | Out-Null
     $acc = @(Get-SteamAccounts $script:R.Steam)
     if ($acc.Count -eq 0) { Add-Text 'Could not read the Steam account list. That is OK - just check the Steam window yourself.' $C_DIM | Out-Null }
     Add-Text 'Account that is signed in to Steam right now (Steam remembers the last one):' -Bold | Out-Null
@@ -777,17 +910,18 @@ $script:Pages += @{ Title = 'Layers & quality'; Build = {
     Add-Button 'None' { foreach ($c in $script:LayerChecks.Values) { $c.Checked = $false } } 290 90 | Out-Null
 
     $l1 = New-Object Windows.Forms.Label; $l1.Text = 'Resolution'; [void](Add-Ctl $l1 22 0 120 -Same)
-    $script:ResCombo = New-Object Windows.Forms.ComboBox; $script:ResCombo.DropDownStyle = 'DropDownList'
+    $script:ResCombo = New-Object Windows.Forms.ComboBox; $script:ResCombo.DropDownStyle = 'DropDown'
     foreach ($r in '1920x1080', '2560x1440', '3840x2160') { [void]$script:ResCombo.Items.Add($r) }
-    $script:ResCombo.SelectedItem = "$($script:S.Width)x$($script:S.Height)"; if ($script:ResCombo.SelectedIndex -lt 0) { $script:ResCombo.SelectedIndex = 0 }
+    $script:ResCombo.Text = "$($script:S.Width)x$($script:S.Height)"
     [void](Add-Ctl $script:ResCombo 26 125 130 -Same)
     $l2 = New-Object Windows.Forms.Label; $l2.Text = 'Frames per second'; [void](Add-Ctl $l2 22 290 140 -Same)
-    $script:FpsCombo = New-Object Windows.Forms.ComboBox; $script:FpsCombo.DropDownStyle = 'DropDownList'
+    $script:FpsCombo = New-Object Windows.Forms.ComboBox; $script:FpsCombo.DropDownStyle = 'DropDown'
     foreach ($f in '60', '120', '240') { [void]$script:FpsCombo.Items.Add($f) }
-    $script:FpsCombo.SelectedItem = [string]$script:S.Fps; if ($script:FpsCombo.SelectedIndex -lt 0) { $script:FpsCombo.SelectedIndex = 0 }
+    $script:FpsCombo.Text = [string]$script:S.Fps
     [void](Add-Ctl $script:FpsCombo 26 435 80)
-    Add-Text '60 is normal. 120 or 240 if you want smooth slow motion (bigger files, slower recording).' $C_DIM | Out-Null
-    $script:ResCombo.Add_SelectedIndexChanged({ Update-Estimate }); $script:FpsCombo.Add_SelectedIndexChanged({ Update-Estimate })
+    Add-Text ('Pick a preset or type your own, for example 1280x600 (width x height, even numbers) and any frame rate from 1 to 10000. ' +
+        '60 fps is normal; 120 or 240 gives smooth slow motion (bigger files, slower recording).') $C_DIM | Out-Null
+    $script:ResCombo.Add_TextChanged({ Update-Estimate }); $script:FpsCombo.Add_TextChanged({ Update-Estimate })
 
     $l3 = New-Object Windows.Forms.Label; $l3.Text = 'Save to folder'; [void](Add-Ctl $l3 22 0 120 -Same)
     $script:OutBox = New-Object Windows.Forms.TextBox; $script:OutBox.Text = $script:S.OutDir
@@ -807,13 +941,36 @@ $script:Pages += @{ Title = 'Layers & quality'; Build = {
     try { New-Item -ItemType Directory -Force -Path $p | Out-Null } catch { Show-Error "Cannot create the folder $p"; return $false }
     $script:S.OutDir = $p
     $script:S.Layers = @($LAYERS | Where-Object { $script:LayerChecks[$_.Key].Checked } | ForEach-Object { $_.Key })
-    $wh = $script:ResCombo.SelectedItem -split 'x'; $script:S.Width = [int]$wh[0]; $script:S.Height = [int]$wh[1]
-    $script:S.Fps = [int]$script:FpsCombo.SelectedItem
+    $rc = Check-Res $script:ResCombo.Text; if ($rc.Err) { Show-Error $rc.Err; return $false }
+    $fc = Check-Fps $script:FpsCombo.Text; if ($fc.Err) { Show-Error $fc.Err; return $false }
+    $script:S.Width = $rc.W; $script:S.Height = $rc.H; $script:S.Fps = $fc.N
     Save-State; return $true
 } }
-function Get-SizeMb([string[]]$keys, [int]$fps, [double]$seconds) {
-    $wh = $script:ResCombo.SelectedItem -split 'x'
-    $scale = ([double]$wh[0] * [double]$wh[1] * $fps) / (1920.0 * 1080 * 60)
+function Parse-Res([string]$t) {
+    $m = [regex]::Match([string]$t, '^\s*(\d{1,5})\s*[xX*]\s*(\d{1,5})\s*$')
+    if (-not $m.Success) { return $null }
+    return @([int]$m.Groups[1].Value, [int]$m.Groups[2].Value)
+}
+function Check-Res([string]$t) {
+    $r = Parse-Res $t
+    if (-not $r) { return @{ Err = 'Resolution must look like 1920x1080 (width x height).' } }
+    $w = $r[0]; $h = $r[1]
+    if ($w -lt 320 -or $h -lt 200 -or $w -gt 7680 -or $h -gt 4320) { return @{ Err = 'Resolution must be between 320x200 and 7680x4320.' } }
+    if (($w % 2) -ne 0 -or ($h % 2) -ne 0) { return @{ Err = 'Width and height must be even numbers (the video encoder needs that), for example 1280x600.' } }
+    $warn = $null
+    if ($w -lt 800 -or $h -lt 600) { $warn = 'Below 800x600: CS Demo Manager does not normally allow this size, so it may not work.' }
+    return @{ W = $w; H = $h; Warn = $warn }
+}
+function Check-Fps([string]$t) {
+    $n = 0
+    if (-not [int]::TryParse(([string]$t).Trim(), [ref]$n)) { return @{ Err = 'Frames per second must be a whole number, for example 60.' } }
+    if ($n -lt 1 -or $n -gt 10000) { return @{ Err = 'Frames per second must be between 1 and 10000.' } }
+    $warn = $null
+    if ($n -gt 480) { $warn = 'Very high frame rate: recording takes much longer and the files get much bigger.' }
+    return @{ N = $n; Warn = $warn }
+}
+function Get-SizeMb([string[]]$keys, [int]$fps, [double]$seconds, [int]$w = 1920, [int]$h = 1080) {
+    $scale = ([double]$w * [double]$h * $fps) / (1920.0 * 1080 * 60)
     $mb = 6  # CSDM's own video
     foreach ($k in $keys) { $mb += (Get-Layer $k).Mb }
     return $mb * $scale * $seconds
@@ -822,16 +979,23 @@ function Update-Estimate {
     if (-not $script:EstLbl) { return }
     $secs = 0; foreach ($c in $script:R.Clips) { $secs += ($c.End - $c.Start) / $TICK }
     $keys = @($LAYERS | Where-Object { $script:LayerChecks[$_.Key].Checked } | ForEach-Object { $_.Key })
-    $mb = Get-SizeMb $keys ([int]$script:FpsCombo.SelectedItem) $secs
+    $rc = Check-Res $script:ResCombo.Text; $fc = Check-Fps $script:FpsCombo.Text
+    $problems = @(); $warns = @()
+    foreach ($c in $rc, $fc) { if ($c.Err) { $problems += $c.Err } elseif ($c.Warn) { $warns += $c.Warn } }
+    $mb = 0
+    if ($problems.Count -eq 0) { $mb = Get-SizeMb $keys $fc.N $secs $rc.W $rc.H }
     $free = $null
     try { $free = (New-Object IO.DriveInfo([IO.Path]::GetPathRoot($script:OutBox.Text))).AvailableFreeSpace / 1GB } catch {}
     $t = ("First-person pass: {0:N1} s of footage, roughly {1:N1} GB (rough estimate)." -f $secs, ($mb / 1024))
     if ($free -ne $null) { $t += ("  Free space on that drive: {0:N0} GB." -f $free) }
     $bad = Test-SafePath $script:OutBox.Text
-    if ($bad) { $t += "`r`n" + $bad; $script:EstLbl.ForeColor = $C_BAD } else { $script:EstLbl.ForeColor = $C_DIM }
+    if ($bad) { $problems += $bad }
+    foreach ($x in $problems) { $t += "`r`n" + $x }
+    foreach ($x in $warns) { $t += "`r`nNote: " + $x }
+    if ($problems.Count -gt 0) { $script:EstLbl.ForeColor = $C_BAD } elseif ($warns.Count -gt 0) { $script:EstLbl.ForeColor = $C_WARN } else { $script:EstLbl.ForeColor = $C_DIM }
     $script:EstLbl.Text = $t
     $script:EstLbl.Height = Measure-H $t $F_BODY 760
-    Set-CanNext (-not $bad)
+    Set-CanNext ($problems.Count -eq 0)
 }
 
 # ---------- 7 camera
@@ -857,10 +1021,18 @@ $script:Pages += @{ Title = 'Camera shot'; Build = {
     $script:DistCombo.SelectedIndex = $(switch ([int]$script:S.CamDist) { 80 { 0 } 150 { 2 } default { 1 } })
     [void](Add-Ctl $script:DistCombo 26 175 160)
     $l3 = New-Object Windows.Forms.Label; $l3.Text = 'Frames per second'; [void](Add-Ctl $l3 22 0 170 -Same)
-    $script:CamFps = New-Object Windows.Forms.ComboBox; $script:CamFps.DropDownStyle = 'DropDownList'
+    $script:CamFps = New-Object Windows.Forms.ComboBox; $script:CamFps.DropDownStyle = 'DropDown'
     foreach ($f in '60', '120', '240') { [void]$script:CamFps.Items.Add($f) }
-    $script:CamFps.SelectedItem = [string]$script:S.CamFps; if ($script:CamFps.SelectedIndex -lt 0) { $script:CamFps.SelectedIndex = 1 }
-    [void](Add-Ctl $script:CamFps 26 175 80)
+    $script:CamFps.Text = [string]$script:S.CamFps
+    [void](Add-Ctl $script:CamFps 26 175 80 -Same)
+    $script:CamFpsMsg = New-Object Windows.Forms.Label; $script:CamFpsMsg.ForeColor = $C_DIM; $script:CamFpsMsg.Text = 'preset or any number 1-10000'
+    [void](Add-Ctl $script:CamFpsMsg 40 265 495)
+    $script:CamFps.Add_TextChanged({
+        $fc = Check-Fps $script:CamFps.Text
+        if ($fc.Err) { $script:CamFpsMsg.Text = $fc.Err; $script:CamFpsMsg.ForeColor = $C_BAD; Set-CanNext $false }
+        elseif ($fc.Warn) { $script:CamFpsMsg.Text = $fc.Warn; $script:CamFpsMsg.ForeColor = $C_WARN; Set-CanNext $true }
+        else { $script:CamFpsMsg.Text = 'preset or any number 1-10000'; $script:CamFpsMsg.ForeColor = $C_DIM; Set-CanNext $true }
+    })
     Add-Text 'Camera layers:' -Bold | Out-Null
     $script:CamChecks = @{}
     $col = 0
@@ -880,7 +1052,7 @@ $script:Pages += @{ Title = 'Camera shot'; Build = {
     $script:S.CamOn = $script:CamChk.Checked
     $script:S.Fov = $script:FovBar.Value
     $script:S.CamDist = @(80, 110, 150)[$script:DistCombo.SelectedIndex]
-    $script:S.CamFps = [int]$script:CamFps.SelectedItem
+    if ($script:CamChk.Checked) { $fc = Check-Fps $script:CamFps.Text; if ($fc.Err) { Show-Error $fc.Err; return $false }; $script:S.CamFps = $fc.N }
     $script:S.CamLayers = @($script:CamChecks.Keys | Where-Object { $script:CamChecks[$_].Checked })
     Save-State; return $true
 } }
@@ -1009,7 +1181,9 @@ function New-RunFiles {
     [IO.File]::WriteAllText((Join-Path $run 'MANUAL_STEPS.txt'), $manual.ToString(), $UTF8)
     $script:R.ManualFile = Join-Path $run 'MANUAL_STEPS.txt'
 
-    $ff = [ordered]@{ audioBitrate = 256; constantRateFactor = 18; customLocationEnabled = $false; customExecutableLocation = ''
+    $tp = Get-RecToolPaths
+    $ffCustom = [bool]$tp.FfmpegCustom; $ffLoc = ''; if ($ffCustom) { $ffLoc = $tp.Ffmpeg }
+    $ff = [ordered]@{ audioBitrate = 256; constantRateFactor = 18; customLocationEnabled = $ffCustom; customExecutableLocation = $ffLoc
                       videoContainer = 'mp4'; videoCodec = 'libx264'; audioCodec = 'libmp3lame'; inputParameters = ''; outputParameters = '' }
     $mkCfg = {
         param($seq, $fps, $outDir)
@@ -1084,7 +1258,12 @@ function Next-RecStep {
         'csdm' {
             RecSay "Step $n/$($script:R.QTotal): recording the $($s.Label) pass. CS2 opens now - hands off until it closes."
             $script:R.CurLog = $s.Log
-            $script:OnTick = { $t = Read-All $script:R.CurLog; if ($t -and $t.Length -ne $script:R.LastLen) { $script:R.LastLen = $t.Length; $script:RecLog.Text = ($t -replace "`r?`n", "`r`n"); $script:RecLog.SelectionStart = $script:RecLog.TextLength; $script:RecLog.ScrollToCaret() } }
+            $script:R.StepStart = Get-Date; $script:R.InsecureOk = $false; $script:R.TickN = 0
+            $script:OnTick = {
+                $t = Read-All $script:R.CurLog
+                if ($t -and $t.Length -ne $script:R.LastLen) { $script:R.LastLen = $t.Length; $script:RecLog.Text = ($t -replace "`r?`n", "`r`n"); $script:RecLog.SelectionStart = $script:RecLog.TextLength; $script:RecLog.ScrollToCaret() }
+                if (-not $script:R.InsecureOk) { $script:R.TickN++; if ($script:R.TickN % 4 -eq 0) { Test-Insecure } }
+            }
             [void](Start-Bg ((Q $csdm) + ' video --config-file ' + (Q $s.Cfg)) {
                 param($o, $e, $code, $ctx)
                 $script:OnTick = $null
@@ -1097,6 +1276,25 @@ function Next-RecStep {
             } $s $s.Log)
         }
         'verify' { RecSay 'Checking the files...'; Finish-Recording }
+    }
+}
+function Test-Insecure {
+    # Safety net: CS Demo Manager always adds -insecure itself. If a CS2 started during this step runs without it, stop at once.
+    $ps = @(Get-CimInstance Win32_Process -Filter "Name='cs2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CreationDate -ge $script:R.StepStart })
+    foreach ($p in $ps) {
+        if (-not $p.CommandLine) { continue }
+        if ($p.CommandLine -match '(?i)(^|\s)-insecure(\s|$)') {
+            $script:R.InsecureOk = $true; Log "Safety check OK: CS2 runs with -insecure"; $script:RecLbl.Text += '   (safety check: -insecure OK)'; return
+        }
+        Log "SAFETY STOP: cs2 command line without -insecure: $($p.CommandLine)"
+        Stop-AllJobs
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        Get-Process hlae -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        if ($script:R.Queue) { $script:R.Queue.Clear() }
+        Fail-Rec ("SAFETY STOP: CS2 was started WITHOUT the -insecure launch option.`r`n`r`n" +
+            "Recording tools (HLAE) must only run with -insecure, otherwise there is a VAC ban risk. The tool closed CS2 right away.`r`n`r`n" +
+            "CS Demo Manager normally adds -insecure by itself, so this should not happen. Update CS Demo Manager and do not record until this is solved.")
+        return
     }
 }
 function Get-Hint([string]$t) {

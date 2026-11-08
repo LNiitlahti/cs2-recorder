@@ -27,7 +27,7 @@ WHAT YOU NEED (the tool checks all of this and helps you install what is missing
 - Steam + Counter-Strike 2
 - CS Demo Manager 3.20.1 or newer (free, cs-demo-manager.com) with its PostgreSQL database
 - About 2-5 minutes of internet the first time (the tool installs a small demo reader)
-- HLAE and FFmpeg are installed by CS Demo Manager by itself
+- HLAE and FFmpeg: the tool installs them for you in the first step (with a progress bar)
 
 WHAT YOU GET (default folder C:\cs2-recorder\recordings)
   <demo>_<date>\
@@ -43,7 +43,15 @@ WHAT YOU GET (default folder C:\cs2-recorder\recordings)
 GOOD TO KNOW
 - Do not use the PC while CS2 is recording. CS2 opens and closes by itself.
 - Use a separate Steam account for recording (the tool explains why).
+- VAC safety: recording always starts CS2 with -insecure. The tool checks this while recording
+  and closes CS2 immediately if it is missing.
+- Resolution and frame rate: pick a preset or type your own (e.g. 1280x600, 1-10000 fps).
 - Very old demos (from an older CS2 update) can crash the game when they load. Use newer demos then.
 - depth.mov looks almost black. That is normal; brighten it in your editor.
 - The camera shot is computed without 3D map data, so it can sometimes clip through a wall or object. Check it.
 - Problems? Look at C:\cs2-recorder\data\wizard.log and the log_*.txt files in the recording folder.
+
+CHANGES
+v0.2.0  HLAE + FFmpeg installed during setup with progress bar (fixes CSDM's "Archive read error");
+        -insecure safety check; custom resolution and frame rate.
+v0.1.0  First test version.
