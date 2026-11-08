@@ -26,7 +26,8 @@ WHAT YOU NEED (the tool checks all of this and helps you install what is missing
 - Windows 10 or 11
 - Steam + Counter-Strike 2
 - CS Demo Manager 3.20.1 or newer (free, cs-demo-manager.com) with its PostgreSQL database
-- About 2-5 minutes of internet the first time (the tool installs a small demo reader)
+- Python 3.11-3.14 (the tool installs Python 3.12 for you if missing: winget, or the signed
+  official installer from python.org) and a few minutes of internet for the demo reader
 - HLAE and FFmpeg: the tool installs them for you in the first step (with a progress bar)
 
 WHAT YOU GET (default folder C:\cs2-recorder\recordings)
@@ -52,6 +53,8 @@ GOOD TO KNOW
 - Problems? Look at C:\cs2-recorder\data\wizard.log and the log_*.txt files in the recording folder.
 
 CHANGES
+v0.2.1  Separate Python row with an "Install Python 3.12" button (winget, or the
+        signature-checked python.org installer); finds Python on PATH too.
 v0.2.0  HLAE + FFmpeg installed during setup with progress bar (fixes CSDM's "Archive read error");
         -insecure safety check; custom resolution and frame rate.
 v0.1.0  First test version.

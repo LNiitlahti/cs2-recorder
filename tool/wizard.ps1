@@ -271,17 +271,31 @@ function Get-VideoCfgPath([string]$steam, [string]$id64) {
     $acc = [int64]$id64 - 76561197960265728
     return (Join-Path $steam "userdata\$acc\730\local\cfg\cs2_video.txt")
 }
+$PY_OK = @('3.12', '3.13', '3.11', '3.14')   # versions with ready-made demoparser2 builds; 3.12 preferred
+function Get-PyVersion([string]$exe) {
+    $ErrorActionPreference = 'Continue'
+    try { $v = & $exe -c "import sys;print('%d.%d.%d' % sys.version_info[:3])" 2>$null; if ($LASTEXITCODE -eq 0 -and $v) { return (@($v)[-1]).Trim() } } catch {}
+    return $null
+}
 function Find-Python {
     $ErrorActionPreference = 'Continue'   # stderr from py.exe must not count as a crash
-    foreach ($v in '3.12', '3.13', '3.11', '3.14') {
+    $found = @()
+    foreach ($v in $PY_OK) {
         try {
             $r = & py.exe "-$v" -c 'import sys;print(sys.executable)' 2>$null
             if ($LASTEXITCODE -eq 0 -and $r) { $p = (@($r)[-1]).Trim(); if (Test-Path $p) { return $p } }
         } catch {}
     }
-    $c = @(Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python\Python31[1-4]\python.exe", "$env:ProgramFiles\Python31[1-4]\python.exe" -ErrorAction SilentlyContinue |
-           Sort-Object FullName -Descending)
-    if ($c.Count -gt 0) { return $c[0].FullName }
+    foreach ($v in $PY_OK) {
+        $n = 'Python' + $v.Replace('.', '')
+        foreach ($p in (Join-Path $env:LOCALAPPDATA "Programs\Python\$n\python.exe"), (Join-Path $env:ProgramFiles "$n\python.exe")) { if (Test-Path $p) { return $p } }
+    }
+    # python.exe on PATH (skip the Microsoft Store placeholder in WindowsApps, it only opens the Store)
+    foreach ($c in @(Get-Command python.exe -All -ErrorAction SilentlyContinue)) {
+        if ($c.Source -like '*\WindowsApps\*') { continue }
+        $ver = Get-PyVersion $c.Source
+        if ($ver -and ($PY_OK -contains (($ver -split '\.')[0..1] -join '.'))) { return $c.Source }
+    }
     return $null
 }
 $script:VenvPy = Join-Path $script:Data 'pyenv\Scripts\python.exe'
@@ -460,7 +474,7 @@ $script:Pages += @{ Title = 'Check software'; Build = {
     }
     $script:Rw = @{
         Csdm = (& $mk 'CS Demo Manager'); Pg = (& $mk 'PostgreSQL (CSDM database)'); Steam = (& $mk 'Steam')
-        Cs2 = (& $mk 'Counter-Strike 2'); Py = (& $mk 'Demo reader (Python)'); Rec = (& $mk 'HLAE + FFmpeg (recording)')
+        Cs2 = (& $mk 'Counter-Strike 2'); Python = (& $mk 'Python'); Py = (& $mk 'Demo reader'); Rec = (& $mk 'HLAE + FFmpeg (recording)')
     }
     $script:DlLbl = Add-Text ' ' $C_ACC; $script:DlLbl.Visible = $false
     $script:DlBar = New-Object Windows.Forms.ProgressBar; $script:DlBar.Minimum = 0; $script:DlBar.Maximum = 1000
@@ -489,6 +503,7 @@ $script:Pages += @{ Title = 'Check software'; Build = {
     $script:Rw.Steam.B.Add_Click({ Start-Process 'https://store.steampowered.com/about/' })
     $script:Rw.Cs2.B.Add_Click({ Start-Process 'steam://install/730' })
     $script:Rw.Py.B.Add_Click({ Install-Helper })
+    $script:Rw.Python.B.Add_Click({ Install-Python })
     $script:Rw.Rec.B.Add_Click({ Install-RecTools })
     Invoke-Checks
 } }
@@ -520,7 +535,11 @@ function Invoke-Checks {
     $cs2 = Get-Cs2Path $steam
     if ($cs2) { Set-Row $script:Rw.Cs2 $true 'OK  installed' } else { Set-Row $script:Rw.Cs2 $false 'Counter-Strike 2 not found in your Steam libraries.' 'Install CS2'; $all = $false }
 
+    $py = Find-Python; $script:R.BasePy = $py
+    if ($py) { Set-Row $script:Rw.Python $true ("OK  Python {0}`r`n{1}" -f (Get-PyVersion $py), $py) }
+    else { Set-Row $script:Rw.Python $false 'No suitable Python (3.11-3.14) found. Needed once to read demos.' 'Install Python 3.12'; $all = $false }
     if (Test-HelperReady) { $script:R.Py = $script:VenvPy; Set-Row $script:Rw.Py $true 'OK  ready' }
+    elseif (-not $py) { Set-Row $script:Rw.Py $false 'Install Python first (row above).'; $all = $false }
     else { Set-Row $script:Rw.Py $false 'Needed to read kills from demos. One-time install (about 2-5 minutes, needs internet).' 'Install'; $all = $false }
 
     $tp = Get-RecToolPaths
@@ -652,26 +671,85 @@ try {
     } $j)
 }
 
+# ---------- Python 3.12: winget first; fallback = official python.org installer, signature-checked, silent per-user install
+$PY_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe'   # 3.12.10 = last 3.12 with a Windows installer
+$PY_SIZE = 26964224
+function Install-Python {
+    if (Find-Python) { Invoke-Checks; return }
+    if (-not (Ask-YesNo "Install Python 3.12 now?`r`n`r`nIt is free, installs only for your Windows user (no admin needed) and takes 1-3 minutes.")) { return }
+    $script:CheckLog.Visible = $true; $script:CheckLog.Text = ''
+    $script:Rw.Python.B.Enabled = $false; $script:Rw.Py.B.Enabled = $false
+    if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
+        $script:CheckLog.AppendText("Installing Python 3.12 with winget...`r`n")
+        $script:DlLbl.Text = 'Installing Python 3.12 with winget...'; $script:DlLbl.Visible = $true
+        $script:DlBar.Style = 'Marquee'; $script:DlBar.Visible = $true
+        [void](Start-Bg 'winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements --silent' {
+            param($o, $e, $code)
+            $script:CheckLog.AppendText(((($o + "`n" + $e) -replace '[^\x20-\x7E\r\n]', '') -replace "`r?`n", "`r`n"))
+            if (Find-Python) { Finish-PythonInstall $true; return }
+            $script:CheckLog.AppendText("`r`nwinget did not finish (code $code). Trying the official installer from python.org instead...`r`n")
+            Install-PythonFromOrg
+        })
+    } else {
+        $script:CheckLog.AppendText("winget is not available on this PC. Using the official installer from python.org.`r`n")
+        Install-PythonFromOrg
+    }
+}
+function Install-PythonFromOrg {
+    $exe = Join-Path $script:Data 'python-3.12.10-amd64.exe'
+    $script:R.Dl = @{ Name = 'Python 3.12.10'; Zip = $exe; Size = $PY_SIZE }
+    $script:DlBar.Style = 'Continuous'; $script:DlBar.Value = 0; $script:DlBar.Visible = $true
+    $script:DlLbl.Text = 'Downloading Python 3.12.10...'; $script:DlLbl.Visible = $true
+    $script:OnTick = {
+        $d = $script:R.Dl; if (-not $d) { return }
+        $len = 0; try { $len = (Get-Item -LiteralPath $d.Zip -ErrorAction Stop).Length } catch {}
+        if ($len -lt $d.Size) {
+            $script:DlBar.Style = 'Continuous'; $script:DlBar.Value = [int][Math]::Min(1000, 1000 * $len / $d.Size)
+            $script:DlLbl.Text = ('Downloading {0}:  {1:N1} / {2:N1} MB' -f $d.Name, ($len / 1MB), ($d.Size / 1MB))
+        } else { $script:DlBar.Style = 'Marquee'; $script:DlLbl.Text = 'Installing Python 3.12.10 (about 1-2 minutes)...' }
+    }
+    $code = @'
+$ErrorActionPreference = 'Stop'
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }
+    $wc = New-Object Net.WebClient; $wc.Headers.Add('User-Agent', 'cs2-recorder'); $wc.DownloadFile($url, $exe)
+    $sig = Get-AuthenticodeSignature -LiteralPath $exe
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+        Remove-Item -LiteralPath $exe -Force
+        throw ("The downloaded installer is not validly signed by the Python Software Foundation (status: " + $sig.Status + "). It was deleted for safety.")
+    }
+    $p = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList '/quiet', 'InstallAllUsers=0', 'InstallLauncherAllUsers=0', 'Include_launcher=1', 'PrependPath=1', 'Include_test=0', 'Include_doc=0', 'Shortcuts=0'
+    if ($p.ExitCode -ne 0) { throw ("The Python installer ended with code " + $p.ExitCode + ".") }
+    Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+    'OK'
+} catch { 'ERROR: ' + $_.Exception.Message; exit 1 }
+'@
+    $code = ('$url = {0}; $exe = {1}' -f (Lit $PY_URL), (Lit $exe)) + "`r`n" + $code
+    [void](Start-PsBg $code {
+        param($o, $e, $code)
+        $script:R.Dl = $null; $script:OnTick = $null
+        $script:CheckLog.AppendText((($o + "`n" + $e).Trim() -replace "`r?`n", "`r`n") + "`r`n")
+        Finish-PythonInstall ([bool](Find-Python))
+    })
+}
+function Finish-PythonInstall([bool]$ok) {
+    $script:DlBar.Visible = $false; $script:DlLbl.Visible = $false; $script:OnTick = $null
+    $script:Rw.Python.B.Enabled = $true; $script:Rw.Py.B.Enabled = $true
+    if ($ok) { $script:CheckLog.AppendText("Python 3.12 is installed.`r`n") }
+    else {
+        Show-Error ("Python could not be installed automatically. Details are in the box.`r`n`r`n" +
+            "Manual way: python.org opens now. Download 'Windows installer (64-bit)' for Python 3.12.10, run it, tick 'Add python.exe to PATH', press 'Install Now', then press 'Check again' here.")
+        Start-Process 'https://www.python.org/downloads/release/python-31210/'
+    }
+    Invoke-Checks
+}
+
 function Install-Helper {
     $script:CheckLog.Visible = $true
     $script:CheckLog.Text = "Looking for Python...`r`n"
     $py = Find-Python
-    if (-not $py) {
-        if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
-            Show-Error "Python was not found and Windows' installer tool (winget) is missing.`r`n`r`nInstall Python 3.12 from python.org (tick 'Add python.exe to PATH'), then press 'Check again'."
-            Start-Process 'https://www.python.org/downloads/windows/'; return
-        }
-        if (-not (Ask-YesNo "Python is needed once to read demos. Install Python 3.12 now (free, from Microsoft's winget, only for your user)?")) { return }
-        $script:CheckLog.AppendText("Installing Python 3.12 with winget (a window may ask for permission)...`r`n")
-        $script:Rw.Py.B.Enabled = $false
-        [void](Start-Bg 'winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements --silent' {
-            param($o, $e, $code)
-            $script:Rw.Py.B.Enabled = $true
-            $script:CheckLog.AppendText(($o + $e) -replace "`r?`n", "`r`n")
-            if (Find-Python) { Install-Helper } else { Show-Error "Python install did not finish (code $code). Try installing Python 3.12 from python.org, then press 'Check again'."; Start-Process 'https://www.python.org/downloads/windows/' }
-        })
-        return
-    }
+    if (-not $py) { Show-Error 'Install Python first with the "Install Python 3.12" button.'; Invoke-Checks; return }
     $venv = Join-Path $script:Data 'pyenv'
     $script:CheckLog.AppendText("Using $py`r`nCreating a private Python environment and installing demoparser2 (may take a few minutes)...`r`n")
     $script:Rw.Py.B.Enabled = $false
