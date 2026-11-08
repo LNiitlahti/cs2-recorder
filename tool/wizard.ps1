@@ -70,6 +70,7 @@ $form.ForeColor = $C_TEXT
 $form.Font = $F_BODY
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
+try { $form.Icon = New-Object Drawing.Icon((Join-Path $script:Tool 'icon.ico')) } catch {}
 
 $side = New-Object Windows.Forms.Panel
 $side.SetBounds(0, 0, 220, 700); $side.BackColor = $C_PANEL
