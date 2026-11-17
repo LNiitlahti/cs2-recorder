@@ -55,6 +55,9 @@ try {
     Check '/api/demo missing file gives plain error' ($j.ok -eq $false -and $j.error)
     $r = Req GET '/api/report?format=text' $tok
     Check '/api/report text' ($r.code -eq 200)
+    $r = Req GET '/api/record/status' $tok
+    $j = $null; try { $j = $r.body | ConvertFrom-Json } catch {}
+    Check '/api/record/status answers (status object is not the HTTP code)' ($r.code -eq 200 -and $null -ne $j -and $j.ok -eq $true -and $null -ne $j.status)
     $r = Req GET '/api/nothing' $tok
     Check 'unknown api is 404' ($r.code -eq 404)
     [void](Req POST '/api/quit' $tok @{})

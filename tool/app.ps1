@@ -32,6 +32,8 @@ $script:Run = $true
 $script:LastPing = Get-Date
 $script:Seen = $false
 $script:DialogOpen = $false
+$script:ByeAt = $null
+$script:RR = $null
 $script:Browser = $null
 $script:BrowserStart = $null
 $script:Jobs = @{}
@@ -291,6 +293,7 @@ function Invoke-Api([string]$method, [string]$path, $q, $b) {
     switch ("$method $path") {
         'GET /api/ping' { return @{ ok = $true; libs = $script:Libs } }
         'POST /api/quit' { $script:Run = $false; return @{ ok = $true } }
+        'POST /api/bye' { $script:ByeAt = Get-Date; return @{ ok = $true } }
         'GET /api/check' { return (Get-CheckResult) }
         'POST /api/setup/start' { return (Start-SetupRun ([string]$b.fixId)) }
         'GET /api/setup/status' {
@@ -446,7 +449,7 @@ function Invoke-Api([string]$method, [string]$path, $q, $b) {
             if ($q['format'] -eq 'text') { return @{ ok = $true; text = (Get-RedactedLogs) } }
             return @{ ok = $true; zip = $true }
         }
-        default { return @{ ok = $false; error = 'Unknown request.'; status = 404 } }
+        default { return @{ ok = $false; error = 'Unknown request.'; httpCode = 404 } }
     }
 }
 function Demo-View($r) {
@@ -502,7 +505,7 @@ function Handle-Request($ctx) {
         try { $r = Invoke-Api $req.HttpMethod $path $q $b }
         catch { Log ("API error $path : " + $_.Exception.Message + "`n" + $_.ScriptStackTrace); $r = @{ ok = $false; error = 'Something went wrong inside the app. Press Copy report and send it to the developer.' } }
         if ($path -eq '/api/report' -and $r.zip) { Send-Report $res; return }
-        $code = 200; if ($r -is [hashtable] -and $r.status) { $code = [int]$r.status; $r.Remove('status') }
+        $code = 200; if ($r -is [hashtable] -and $r.ContainsKey('httpCode')) { $code = [int]$r.httpCode; $r.Remove('httpCode') }
         Send-Json $res $code $r
         return
     }
@@ -547,19 +550,29 @@ if (-not $NoWindow) {
     $exe = Find-Browser
     if ($exe) {
         $prof = Join-Path $script:Data 'browser-profile'
-        $script:Browser = Start-Process -FilePath $exe -ArgumentList @("--app=$url", "--user-data-dir=`"$prof`"", '--no-first-run', '--no-default-browser-check', '--window-size=1100,820') -PassThru
+        $script:Browser = Start-Process -FilePath $exe -ArgumentList @("--app=$url", "--user-data-dir=`"$prof`"", '--no-first-run', '--no-default-browser-check', '--window-size=1100,820',
+            '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows') -PassThru
         $script:BrowserStart = Get-Date
     } else { Start-Process $url }
 }
 $script:StartedAt = Get-Date
 
+# Shutdown rules. The browser process is NOT watched: Edge/Chrome hand the window to an already running
+# instance and exit at once, which looked like "window closed". Instead the page says goodbye on close
+# (/api/bye, 5 s grace so a reload survives) and a slow heartbeat backs it up: hidden windows throttle timers
+# to about one per minute, so the timeout must be well above 60 s.
+function Test-Busy {
+    if ($script:Setup.running) { return $true }
+    if ($script:RR -and $script:RR.State -eq 'running') { return $true }
+    return $false
+}
 function Test-Idle {
     if ($NoWindow) { return $false }
-    if ($script:DialogOpen) { return $false }
+    if ($script:DialogOpen -or (Test-Busy)) { return $false }
     $now = Get-Date
-    if ($script:Browser -and $script:Browser.HasExited -and (($now - $script:BrowserStart).TotalSeconds -gt 10)) { return $true }
-    if ($script:Seen -and (($now - $script:LastPing).TotalSeconds -gt 30)) { return $true }
-    if (-not $script:Seen -and (($now - $script:StartedAt).TotalSeconds -gt 120)) { return $true }
+    if ($script:ByeAt -and $script:LastPing -lt $script:ByeAt -and (($now - $script:ByeAt).TotalSeconds -gt 5)) { Log 'window closed'; return $true }
+    if ($script:Seen -and (($now - $script:LastPing).TotalSeconds -gt 180)) { Log 'no contact from the window for 3 minutes'; return $true }
+    if (-not $script:Seen -and (($now - $script:StartedAt).TotalSeconds -gt 120)) { Log 'the window never connected'; return $true }
     return $false
 }
 
@@ -567,12 +580,14 @@ try {
     while ($script:Run) {
         $t = $listener.GetContextAsync()
         while (-not $t.Wait(300)) {
+            # drive the recording from here so it never depends on the (possibly throttled) window polling
+            try { if ($script:RR -and $script:RR.State -eq 'running' -and (Test-Fn 'Update-RecordRun')) { Update-RecordRun } } catch {}
             if (-not $script:Run -or (Test-Idle)) { $script:Run = $false; break }
         }
         if (-not $script:Run) { break }
         $ctx = $t.Result
         try { Handle-Request $ctx }
-        catch { Log ("request error: " + $_.Exception.Message); try { $ctx.Response.Abort() } catch {} }
+        catch { Log ("request error " + $ctx.Request.HttpMethod + " " + $ctx.Request.Url.AbsolutePath + " : " + $_.Exception.Message + "`n" + $_.ScriptStackTrace); try { $ctx.Response.Abort() } catch {} }
     }
 } finally {
     Log 'shutting down'

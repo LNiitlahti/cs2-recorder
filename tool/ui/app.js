@@ -410,6 +410,12 @@
   $('copyReport').addEventListener('click', copyReport);
   $('saveReport').addEventListener('click', saveReport);
   setInterval(function () { api('GET', '/api/ping'); }, 5000);
+  // hidden windows throttle timers, so ping right away when the window comes back
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) api('GET', '/api/ping'); });
+  // tell the app the window is closing (a reload pings again within the 5 s grace and keeps it alive)
+  window.addEventListener('pagehide', function () {
+    try { fetch('/api/bye', { method: 'POST', headers: { 'X-Token': TOKEN }, keepalive: true }); } catch (e) {}
+  });
   api('GET', '/api/state').then(function (r) {
     if (r.state) { for (var k in r.state) if (k in DEF) S.o[k] = r.state[k]; }
     if (!S.o.outDir) S.o.outDir = 'C:\\cs2-recorder\\recordings';
