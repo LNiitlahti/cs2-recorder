@@ -349,11 +349,18 @@
       paintPf();
     });
   }
+  function fixGraphics() {
+    var b = payload();
+    api('POST', '/api/graphics/fix', { accountId: b.accountId, accountKind: b.accountKind }).then(function (r) {
+      if (!r.ok) return showError(r.error);
+      clearError(); runPreflight();
+    });
+  }
   function paintPf() {
     var list = $('pfList'); if (!list) return; list.textContent = '';
     if (!S.pf) { list.appendChild(h('li', {}, [h('span', { class: 'dot' }), h('div', { class: 'muted', text: 'Checking...' })])); $('recBtn').disabled = true; return; }
     var warns = 0;
-    S.pf.checks.forEach(function (c) { if (c.status === 'warn') warns++; list.appendChild(h('li', {}, [h('span', { class: 'dot ' + c.status, title: c.status }), h('div', {}, [h('div', { class: 't', text: c.label }), h('div', { class: 'd', text: c.detail || '' })])])); });
+    S.pf.checks.forEach(function (c) { if (c.status === 'warn') warns++; list.appendChild(h('li', {}, [h('span', { class: 'dot ' + c.status, title: c.status }), h('div', { class: 'grow' }, [h('div', { class: 't', text: c.label }), h('div', { class: 'd', text: c.detail || '' })]), (c.fixId === 'graphics' ? h('button', { type: 'button', text: 'Fix automatically', onclick: function () { fixGraphics(); } }) : null)])); });
     $('ackRow').hidden = warns === 0;
     $('recBtn').disabled = !!S.pf.blocking || (warns > 0 && !S.ack);
   }

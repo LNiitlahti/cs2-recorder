@@ -24,6 +24,7 @@ Run `START-NEW.bat`. The old wizard stays available as `START-CLASSIC.bat` until
 - [ ] `Find-Python` ignores the Microsoft Store placeholder.
 
 ## Preflight
+- [ ] "Fix automatically" button (graphics): with CS2 closed, on the RECORDING account only, press it; confirm `cs2_video.txt.bak_*` appears, V-Sync/FSR change, and CS2 keeps them after launch (Steam cloud or CS2 might rewrite the file). Tested only on temp files.
 - [x] Real `cs2_video.txt` parsing and key names `setting.mat_vsync` / `setting.videocfg_fsr_detail` confirmed on this PC (Nov 17).
 - [ ] Add the max VALUES of the other graphics settings to `tool/data/graphics_max.json` (shadow, texture, particle, AO, HDR, shader, MSAA), then set `"verified": true`.
 - [x] Demo header carries the patch in `patch_version` (seen: 14173); the 14192 block matches that key. [ ] Still untested with a real 14192 demo.

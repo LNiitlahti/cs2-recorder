@@ -18,6 +18,8 @@ function Read-PreflightText([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     return [System.IO.File]::ReadAllText($path)
 }
+function Write-PreflightText([string]$path, [string]$text) { [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($false))) }
+function Copy-FileSafe([string]$from, [string]$to) { Copy-Item -LiteralPath $from -Destination $to -Force }
 function Get-GraphicsTablePath { return (Join-Path (Join-Path (Split-Path -Parent $script:PreflightLibDir) 'data') 'graphics_max.json') }
 function Get-GraphicsTableAgeDays([string]$path) { return ((Get-Date) - (Get-Item -LiteralPath $path).LastWriteTime).TotalDays }
 function Get-DefaultSteamPath {
@@ -29,7 +31,7 @@ function Get-DefaultSteamPath {
 
 # ---- pure helpers ----
 function New-PfCheck([string]$id, [string]$status, [string]$label, [string]$detail) {
-    return [pscustomobject]@{ id = $id; status = $status; label = $label; detail = $detail }
+    return [pscustomobject]@{ id = $id; status = $status; label = $label; detail = $detail; fixId = $null }
 }
 function Test-PfSafePath([string]$p) {
     if ($p -match '[^\x20-\x7E]') { return 'The folder path has special letters (accents or umlauts). Pick a simple path like C:\cs2-recorder\recordings.' }
@@ -81,10 +83,47 @@ function Test-GraphicsCheck([string]$steam, [string]$id64) {
             $bad += "$lbl ($($r.key)=$($cur[$k]), expected $($r.equals))"
         }
     }
-    if ($bad.Count -gt 0) { return New-PfCheck 'graphics' 'warn' $label ((@($bad) + $notes) -join ' ') }
+    if ($bad.Count -gt 0) { $c = New-PfCheck 'graphics' 'warn' $label ((@($bad) + $notes) -join ' '); $c.fixId = 'graphics'; return $c }
     if ($age -gt 30) { return New-PfCheck 'graphics' 'warn' $label ($notes -join ' ') }
     $d = 'Known settings look fine.'; if ($notes.Count) { $d += ' ' + ($notes -join ' ') }
     return New-PfCheck 'graphics' 'ok' $label $d
+}
+
+function Set-GraphicsFix {
+    # Sets the table's rules in the recording account's cs2_video.txt. Backup first, verify after, restore on failure.
+    param([string]$SteamPath, [string]$AccountId)
+    if (Test-Cs2Running) { return @{ ok = $false; message = 'Close CS2 first, then try again (CS2 would overwrite the file).' } }
+    $cfg = Get-VideoCfgPathPf $SteamPath $AccountId
+    if (-not $cfg) { return @{ ok = $false; message = 'Could not locate the video settings file for this account.' } }
+    $text = Read-PreflightText $cfg
+    if ($null -eq $text) { return @{ ok = $false; message = 'No video settings file yet. Start CS2 once on this account, then try again.' } }
+    $raw = Read-PreflightText (Get-GraphicsTablePath)
+    if ($null -eq $raw) { return @{ ok = $false; message = 'Reference graphics table is missing.' } }
+    try { $t = $raw | ConvertFrom-Json } catch { return @{ ok = $false; message = 'Reference graphics table is unreadable.' } }
+    $cur = ConvertFrom-VideoCfg $text
+    $want = @{}
+    foreach ($r in @($t.settings)) {
+        if (-not $r -or -not $r.key -or $null -eq $r.equals) { continue }
+        $k = "$($r.key)".ToLower()
+        if ($cur.ContainsKey($k) -and "$($cur[$k])" -ne "$($r.equals)") { $want[$k] = "$($r.equals)" }
+    }
+    if ($want.Count -eq 0) { return @{ ok = $true; changed = @(); backup = ''; message = 'Nothing to change.' } }
+    $bak = $cfg + '.bak_' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    try { Copy-FileSafe $cfg $bak } catch { return @{ ok = $false; message = 'Could not make a backup, so nothing was changed.' } }
+    $new = $text
+    foreach ($k in $want.Keys) {
+        $pat = '(?i)("' + [regex]::Escape($k) + '"\s+")[^"]*(")'
+        $new = [regex]::Replace($new, $pat, { param($m) $m.Groups[1].Value + $want[$k] + $m.Groups[2].Value })
+    }
+    try { Write-PreflightText $cfg $new } catch { return @{ ok = $false; message = 'Could not write the settings file: ' + $_.Exception.Message; backup = $bak } }
+    $after = ConvertFrom-VideoCfg (Read-PreflightText $cfg)
+    foreach ($k in $want.Keys) {
+        if ("$($after[$k])" -ne $want[$k]) {
+            try { Copy-FileSafe $bak $cfg } catch {}
+            return @{ ok = $false; message = 'The change did not stick, so the original file was restored.'; backup = $bak }
+        }
+    }
+    return @{ ok = $true; changed = @($want.Keys); backup = $bak; message = 'Graphics settings fixed. A backup of the old file was kept next to it.' }
 }
 
 function Get-Preflight {

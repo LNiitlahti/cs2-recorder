@@ -379,6 +379,14 @@ function Invoke-Api([string]$method, [string]$path, $q, $b) {
                 return @{ ok = $true; blocking = [bool]$r.blocking; checks = @($r.checks) }
             } catch { Log "preflight failed: $_"; return @{ ok = $false; error = 'The safety checks could not run: ' + $_.Exception.Message } }
         }
+        'POST /api/graphics/fix' {
+            if (-not $script:Libs.preflight -or -not (Test-Fn 'Set-GraphicsFix')) { return (Missing-Lib 'preflight') }
+            if ([string]$b.accountKind -ne 'separate') { return @{ ok = $false; error = 'Settings are only changed on your separate recording account.' } }
+            try { $r = Set-GraphicsFix -SteamPath (Get-SteamPath) -AccountId ([string]$b.accountId) } catch { Log "graphics fix failed: $_"; return @{ ok = $false; error = 'Could not change the graphics settings: ' + $_.Exception.Message } }
+            Log "graphics fix: ok=$($r.ok) $($r.message)"
+            if (-not $r.ok) { return @{ ok = $false; error = [string]$r.message } }
+            return @{ ok = $true; message = [string]$r.message; changed = @($r.changed) }
+        }
         'POST /api/record/start' {
             if (-not $script:Libs.record -or -not (Test-Fn 'Start-RecordRun')) { return (Missing-Lib 'record') }
             if (-not $script:Sess.Demo -or $script:Sess.Kills.Count -eq 0) { return @{ ok = $false; error = 'Pick a demo, a player and some kills first.' } }
