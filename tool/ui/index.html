@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="token" content="__TOKEN__">
+<title>CS2 Recorder</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="brand">CS2 RECORDER</div>
+  <ol class="steps" id="steps" aria-label="Steps">
+    <li data-s="1">1 Setup</li>
+    <li data-s="2">2 Pick</li>
+    <li data-s="3">3 Record</li>
+    <li data-s="4">4 Done</li>
+  </ol>
+</header>
+<div id="banner" class="banner" role="alert" hidden></div>
+<main id="main" tabindex="-1">
+  <section id="s1" class="screen" aria-labelledby="h1" hidden></section>
+  <section id="s2" class="screen" aria-labelledby="h2" hidden></section>
+  <section id="s3" class="screen" aria-labelledby="h3" hidden></section>
+  <section id="s4" class="screen" aria-labelledby="h4" hidden></section>
+  <noscript><p>This app needs JavaScript. Open it from START-NEW.bat.</p></noscript>
+</main>
+<footer class="foot">
+  <span>by Lassi Niitlahti</span>
+  <span class="grow"></span>
+  <button class="link" id="copyReport" type="button">Copy report</button>
+  <button class="link" id="saveReport" type="button">Save report (zip)</button>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>

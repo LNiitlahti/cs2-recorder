@@ -21,7 +21,7 @@ try {
             $target = Join-Path $env:LOCALAPPDATA 'cs2-recorder'   # fallback if C:\ is locked down
             New-Item -ItemType Directory -Force -Path (Join-Path $target 'tool') | Out-Null
         }
-        foreach ($f in 'START.bat', 'INSTALL.bat', 'README.txt', 'VERSION.txt') {
+        foreach ($f in 'START.bat', 'START-CLASSIC.bat', 'INSTALL.bat', 'README.txt', 'VERSION.txt') {
             if (Test-Path (Join-Path $src $f)) { Copy-Item -Force (Join-Path $src $f) $target }
         }
         Copy-Item -Force -Recurse (Join-Path $src 'tool\*') (Join-Path $target 'tool')

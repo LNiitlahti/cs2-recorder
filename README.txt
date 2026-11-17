@@ -14,7 +14,8 @@ INSTALL (once)
 4. You can now delete the zip and the extracted folder.
 
 USE
-- Double-click the "CS2 Recorder" icon and follow the steps. Every step explains itself.
+- Double-click the "CS2 Recorder" icon. Press "Set up everything" once; after that, pick a demo, tick your frags and record.
+- If the new window ever fails, START-CLASSIC.bat opens the older wizard.
 
 UPDATE
 - Download the new zip and install it the same way. Your settings and recordings are kept.
@@ -53,6 +54,9 @@ GOOD TO KNOW
 - Problems? Look at C:\cs2-recorder\data\wizard.log and the log_*.txt files in the recording folder.
 
 CHANGES
+v0.3.0  New window (START.bat): one-button setup, safety checks before every recording (main Steam account
+        blocked, CS2 closed, demo patch, graphics, disk, output path), frag presets, size/time estimate, plain-language
+        errors and a report button. The older wizard is still available as START-CLASSIC.bat.
 v0.2.1  Separate Python row with an "Install Python 3.12" button (winget, or the
         signature-checked python.org installer); finds Python on PATH too.
 v0.2.0  HLAE + FFmpeg installed during setup with progress bar (fixes CSDM's "Archive read error");

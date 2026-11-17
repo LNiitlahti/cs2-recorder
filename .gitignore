@@ -1,4 +1,30 @@
-data/
-recordings/
+/data/
+/recordings/
 __pycache__/
 *.pyc
+
+# private Python venv the wizard creates
+venv/
+.venv/
+
+# logs and temp files
+*.log
+*_old_*/
+*.tmp
+
+# release zips (uploaded to GitHub Releases, not committed)
+*.zip
+
+# demos and large video output
+*.dem
+*.dem.zst
+*.dem.bz2
+*.dem.gz
+*.mp4
+*.mov
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

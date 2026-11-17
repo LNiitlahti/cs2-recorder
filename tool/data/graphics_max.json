@@ -1,0 +1,9 @@
+{
+  "verified": false,
+  "updated": "2026-11-17",
+  "note": "Key names setting.mat_vsync and setting.videocfg_fsr_detail were confirmed against a real cs2_video.txt (Nov 2026, file format Version 17). The max VALUES of the other settings (shadow, texture, particle, AO, HDR, shader quality, MSAA) are not known with certainty, so they are not listed: add them here once checked in the CS2 video menu. Keys absent from the user's file, or not listed here, are ignored (never block). Only 'equals' rules exist; a mismatch yields a warning only.",
+  "settings": [
+    { "key": "setting.mat_vsync", "equals": "0", "label": "V-Sync should be off" },
+    { "key": "setting.videocfg_fsr_detail", "equals": "0", "label": "FidelityFX Super Resolution should be Disabled (Highest Quality)" }
+  ]
+}

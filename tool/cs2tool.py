@@ -9,6 +9,9 @@ Every command prints ONE JSON object on stdout. Errors print
   kills <demo> <steamid>                 that player's kills + own death ticks
   campath <demo> <steamid> <anchor> <end> <out.xml> [--fov 50] [--dist 110] [--cache dir]
                                          over-the-shoulder camera path for HLAE
+  presets --demo D --player SID          kill-tick presets (all, multikills, aces, best_round, headshots)
+  estimate --clips N --seconds S --fps F --width W --height H --layers a,b,c
+                                         rough size_mb and minutes
 """
 import argparse
 import json
@@ -128,9 +131,8 @@ def cmd_info(a):
 
 
 # --------------------------------------------------------------- kills
-def cmd_kills(a):
-    p = parser(a.demo)
-    d = deaths_df(p)
+def collect_kills(d, steamid):
+    """Kills by `steamid` and that player's own death ticks from a player_death frame."""
     rounds = col(d, "total_rounds_played", None)
     warm = col(d, "is_warmup_period", False)
     kills, deaths = [], []
@@ -141,9 +143,9 @@ def cmd_kills(a):
         rnd = rounds[i]
         rnd = int(rnd) + 1 if rnd is not None and not (isinstance(rnd, float) and math.isnan(rnd)) else 0
         att, vic = sid(rd.get("attacker_steamid")), sid(rd.get("user_steamid"))
-        if vic == a.steamid:
+        if vic == steamid:
             deaths.append({"tick": int(rd["tick"]), "round": rnd})
-        if att != a.steamid or vic == a.steamid:
+        if att != steamid or vic == steamid:
             continue
         kills.append({
             "tick": int(rd["tick"]),
@@ -157,7 +159,66 @@ def cmd_kills(a):
             "blind": bool(rd.get("attackerblind", False)),
         })
     kills.sort(key=lambda k: k["tick"])
+    return kills, deaths
+
+
+def cmd_kills(a):
+    kills, deaths = collect_kills(deaths_df(parser(a.demo)), a.steamid)
     out({"ok": True, "kills": kills, "deaths": deaths})
+
+
+# --------------------------------------------------------------- presets / estimate (pure logic)
+def compute_presets(kills):
+    """kills: list of dicts with tick, round, headshot. Returns [{id, label, kill_ticks}].
+    Presets with no kills are omitted (except 'all'). 'clutch' is not derivable from
+    kill data alone (needs alive counts), so it is never emitted."""
+    ks = sorted(kills, key=lambda k: k["tick"])
+    per = {}
+    for k in ks:
+        per.setdefault(k["round"], []).append(k)
+    ticks = lambda lst: [k["tick"] for k in lst]
+    res = [{"id": "all", "label": "All kills", "kill_ticks": ticks(ks)}]
+    multi = [k for k in ks if len(per[k["round"]]) >= 3]
+    aces = [k for k in ks if len(per[k["round"]]) >= 5]
+    hs = [k for k in ks if k.get("headshot")]
+    best = []
+    if ks:
+        top = max(len(v) for v in per.values())
+        best_round = min(r for r, v in per.items() if len(v) == top)
+        best = per[best_round]
+    for pid, label, lst in (("multikills", "Multi-kills (3+ in a round)", multi),
+                            ("aces", "Aces (5 kills in a round)", aces),
+                            ("best_round", "Best round", best),
+                            ("headshots", "Headshots only", hs)):
+        if lst:
+            res.append({"id": pid, "label": label, "kill_ticks": ticks(lst)})
+    return res
+
+
+# Per-layer rough MB per second at 1920x1080 60 fps (from wizard.ps1 $LAYERS).
+LAYER_MB = {"clean": 4, "hud": 12, "depth": 10, "depthNoEnts": 10, "players": 15,
+            "viewModel": 20, "world": 4, "particlesBlack": 2, "particlesWhite": 2}
+
+
+def estimate(clips, seconds, fps, width, height, layers):
+    """size_mb ports Get-SizeMb (seconds = total footage seconds, as wizard's Update-Estimate).
+    minutes: wizard says ~1-2 min per clip per pass; we use 1.5 min * clips * (1 + len(layers))
+    passes (CSDM's own video + one per layer)."""
+    scale = (float(width) * float(height) * fps) / (1920.0 * 1080 * 60)
+    mb = 6 + sum(LAYER_MB.get(k, 0) for k in layers)
+    return {"size_mb": round(mb * scale * seconds, 1),
+            "minutes": round(1.5 * clips * (1 + len(layers)), 1)}
+
+
+def cmd_presets(a):
+    kills, _ = collect_kills(deaths_df(parser(a.demo)), a.player)
+    out({"ok": True, "presets": compute_presets(kills)})
+
+
+def cmd_estimate(a):
+    layers = [x for x in a.layers.split(",") if x.strip()]
+    r = estimate(a.clips, a.seconds, a.fps, a.width, a.height, [x.strip() for x in layers])
+    out({"ok": True, "size_mb": r["size_mb"], "minutes": r["minutes"]})
 
 
 # --------------------------------------------------------------- camera path
@@ -357,11 +418,17 @@ def main():
     s.add_argument("end", type=int); s.add_argument("out")
     s.add_argument("--fov", type=float, default=50.0); s.add_argument("--dist", type=float, default=110.0)
     s.add_argument("--cache", default="")
+    s = sp.add_parser("presets"); s.add_argument("--demo", required=True); s.add_argument("--player", required=True)
+    s = sp.add_parser("estimate")
+    s.add_argument("--clips", type=int, required=True); s.add_argument("--seconds", type=float, required=True)
+    s.add_argument("--fps", type=int, default=60); s.add_argument("--width", type=int, default=1920)
+    s.add_argument("--height", type=int, default=1080); s.add_argument("--layers", default="")
     s = sp.add_parser("selftest"); s.add_argument("dir")
     a = ap.parse_args()
     try:
         {"decompress": cmd_decompress, "info": cmd_info, "kills": cmd_kills,
-         "campath": cmd_campath, "selftest": cmd_selftest}[a.cmd](a)
+         "campath": cmd_campath, "presets": cmd_presets,
+         "estimate": cmd_estimate, "selftest": cmd_selftest}[a.cmd](a)
     except SystemExit:
         raise
     except Exception as e:

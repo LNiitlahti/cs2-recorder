@@ -790,11 +790,14 @@ $script:Pages += @{ Title = 'Steam account'; Build = {
     Add-Text 'Now look at the top-right corner of the Steam window and check the name there matches.' $C_DIM | Out-Null
     $script:RbSep = New-Object Windows.Forms.RadioButton; $script:RbSep.Text = 'Yes - this is my separate recording account'
     [void](Add-Ctl $script:RbSep 26)
-    $script:RbMain = New-Object Windows.Forms.RadioButton; $script:RbMain.Text = 'This is my main account - I understand the risk and want to continue'
+    $script:RbMain = New-Object Windows.Forms.RadioButton; $script:RbMain.Text = 'This is my main account'
     [void](Add-Ctl $script:RbMain 26)
+    $script:MainWarn = Add-Text 'Recording on your main account is blocked. Switch Steam to your separate recording account (Steam menu > Change account...), then choose "Yes" above.' $C_WARN
+    $script:MainWarn.Visible = $false
     if ($script:S.AccountKind -eq 'separate') { $script:RbSep.Checked = $true }
     $upd = {
-        $ok = ($script:RbSep.Checked -or $script:RbMain.Checked)
+        $ok = $script:RbSep.Checked   # main account is blocked, not just warned about
+        $script:MainWarn.Visible = $script:RbMain.Checked
         if ($script:AccList.Count -gt 0 -and $script:AccCombo.SelectedIndex -lt 0) { $ok = $false }
         Set-CanNext $ok
     }
@@ -883,6 +886,12 @@ function Show-DemoInfo($r) {
     $script:DemoInfo.Visible = $true
     $t = "Map: $($r.map)`r`nPlayers with kills: $(@($r.players | Where-Object { $_.kills -gt 0 }).Count)`r`n"
     foreach ($p in $r.header.PSObject.Properties) { if ($p.Name -match 'version|build|patch|server|network') { $t += "$($p.Name): $($p.Value)`r`n" } }
+    foreach ($p in $r.header.PSObject.Properties) {
+        if ($p.Name -match 'version|build|patch|network' -and "$($p.Value)" -match '(^|\D)14192(\D|$)') {
+            $t += "`r`nWARNING: this demo is from CS2 patch 14192. Demos from this patch crash the current game when they load (HLAE issue #1258). Use a different demo.`r`n"
+            Log "Demo patch 14192 warning ($($p.Name)=$($p.Value))"; break
+        }
+    }
     $script:DemoInfo.Text = $t
 }
 
